@@ -1,14 +1,10 @@
 ﻿using System.Reflection;
-using DotNet.Testcontainers.Builders;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Identity.Client;
 using Testcontainers.MsSql;
-
-Console.WriteLine("Hello, World!");
 
 await UseHangfire();
 
@@ -62,7 +58,9 @@ public interface IBackgroundTaskListener
 
 }
 
-public sealed class HangfireTaskListener(IBackgroundJobClient hangfireJobClient, IEnumerable<IBackgroundTask> backgroundTasks) 
+public sealed class HangfireTaskListener(
+    IBackgroundJobClient hangfireJobClient, 
+    IEnumerable<IBackgroundTask> backgroundTasks) 
     : BackgroundService, IBackgroundTaskListener
 {
     readonly IBackgroundJobClient _hangfireJobClient = hangfireJobClient;
