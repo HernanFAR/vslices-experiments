@@ -1,16 +1,23 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reflection;
+using DotNet.Testcontainers.Builders;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Identity.Client;
+using Testcontainers.MsSql;
 
 Console.WriteLine("Hello, World!");
 
-await UseMsExtHosting();
+await UseHangfire();
 
 return; 
 
 async ValueTask UseMsExtHosting()
 {
     IHost host = new HostBuilder()
-        .ConfigureServices((hostContext, services) =>
+        .ConfigureServices(services =>
         {
             services
                 .AddSingleton<IBackgroundTaskListener, HostedBackgroundTaskListener>()
@@ -24,10 +31,61 @@ async ValueTask UseMsExtHosting()
     await host.RunAsync();
 }
 
+async ValueTask UseHangfire()
+{
+    await using MsSqlContainer sqlServer = new MsSqlBuilder()
+        .Build();
+    await sqlServer.StartAsync();
+
+    IHost host = new HostBuilder()
+        .ConfigureServices((hostOptions, services) =>
+        {
+            services.AddHangfire(configuration => configuration
+                    // ReSharper disable once AccessToDisposedClosure
+                    .UseSqlServerStorage(sqlServer.GetConnectionString()))
+                .AddHangfireServer()
+                .AddSingleton<IBackgroundTaskListener, HangfireTaskListener>()
+                .AddHostedService<HangfireTaskListener>()
+                .AddSingleton<EventCountConfiguration>()
+                .AddSingleton<IBackgroundTask, EvenCount>()
+                .AddSingleton<IBackgroundTask, OddCount>();
+        })
+        .Build();
+
+    await host.RunAsync();
+
+}
+
 public interface IBackgroundTaskListener
 {
     ValueTask ExecuteRegisteredJobs(CancellationToken cancellationToken);
 
+}
+
+public sealed class HangfireTaskListener(IBackgroundJobClient hangfireJobClient, IEnumerable<IBackgroundTask> backgroundTasks) 
+    : BackgroundService, IBackgroundTaskListener
+{
+    readonly IBackgroundJobClient _hangfireJobClient = hangfireJobClient;
+    readonly IEnumerable<IBackgroundTask> _backgroundTasks = backgroundTasks;
+
+    public async ValueTask ExecuteRegisteredJobs(CancellationToken cancellationToken)
+    {
+        await Task.WhenAll(_backgroundTasks.Select(task =>
+        {
+            Type jobType = task.GetType();
+            MethodInfo? jobMethod = jobType.GetMethod(nameof(IBackgroundTask.ExecuteAsync));
+            Job hangFireJob = new(jobType, jobMethod);
+
+            _hangfireJobClient.Create(hangFireJob, new EnqueuedState(EnqueuedState.DefaultQueue));
+
+            return Task.CompletedTask;
+        }));
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await ExecuteRegisteredJobs(stoppingToken);
+    }
 }
 
 public sealed class HostedBackgroundTaskListener(IEnumerable<IBackgroundTask> backgroundTasks) 
@@ -37,7 +95,7 @@ public sealed class HostedBackgroundTaskListener(IEnumerable<IBackgroundTask> ba
 
     public async ValueTask ExecuteRegisteredJobs(CancellationToken cancellationToken)
     {
-        await Task.WhenAll(_backgroundTasks.Select(task => task.ExecuteAsync(cancellationToken).AsTask()));
+        await Task.WhenAll(_backgroundTasks.Select(task => task.ExecuteAsync().AsTask()));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,7 +106,9 @@ public sealed class HostedBackgroundTaskListener(IEnumerable<IBackgroundTask> ba
 
 public interface IBackgroundTask
 {
-    ValueTask ExecuteAsync(CancellationToken cancellationToken);
+    string Identifier { get; }
+
+    ValueTask ExecuteAsync();
 }
 
 public sealed class EventCountConfiguration
@@ -58,13 +118,15 @@ public sealed class EventCountConfiguration
 
 public sealed class EvenCount(EventCountConfiguration config) : IBackgroundTask
 {
-    public async ValueTask ExecuteAsync(CancellationToken cancellationToken)
+    public string Identifier => "BackgroundEvenCount";
+
+    public async ValueTask ExecuteAsync()
     {
         var currentCount = 0;
 
         while (true)
         {
-            await Task.Delay(1000, cancellationToken);
+            await Task.Delay(1000);
 
             if (currentCount++ >= config.MaxNumber)
             {
@@ -81,13 +143,15 @@ public sealed class EvenCount(EventCountConfiguration config) : IBackgroundTask
 
 public sealed class OddCount(EventCountConfiguration config) : IBackgroundTask
 {
-    public async ValueTask ExecuteAsync(CancellationToken cancellationToken)
+    public string Identifier => "BackgroundOddCount";
+
+    public async ValueTask ExecuteAsync()
     {
         var currentCount = 0;
 
         while (true)
         {
-            await Task.Delay(1000, cancellationToken);
+            await Task.Delay(1000);
 
             if (currentCount++ >= config.MaxNumber)
             {
