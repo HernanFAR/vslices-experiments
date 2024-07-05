@@ -72,7 +72,7 @@ public sealed class HangfireTaskListener(
         {
             Type jobType = task.GetType();
             MethodInfo? jobMethod = jobType.GetMethod(nameof(IBackgroundTask.ExecuteAsync));
-            Job hangFireJob = new(jobType, jobMethod);
+            Job hangFireJob = new(jobType, jobMethod, cancellationToken);
 
             _hangfireJobClient.Create(hangFireJob, new EnqueuedState(EnqueuedState.DefaultQueue));
 
@@ -93,7 +93,7 @@ public sealed class HostedBackgroundTaskListener(IEnumerable<IBackgroundTask> ba
 
     public async ValueTask ExecuteRegisteredJobs(CancellationToken cancellationToken)
     {
-        await Task.WhenAll(_backgroundTasks.Select(task => task.ExecuteAsync().AsTask()));
+        await Task.WhenAll(_backgroundTasks.Select(task => task.ExecuteAsync(cancellationToken).AsTask()));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -106,7 +106,7 @@ public interface IBackgroundTask
 {
     string Identifier { get; }
 
-    ValueTask ExecuteAsync();
+    ValueTask ExecuteAsync(CancellationToken cancellationToken);
 }
 
 public sealed class EventCountConfiguration
@@ -118,13 +118,13 @@ public sealed class EvenCount(EventCountConfiguration config) : IBackgroundTask
 {
     public string Identifier => "BackgroundEvenCount";
 
-    public async ValueTask ExecuteAsync()
+    public async ValueTask ExecuteAsync(CancellationToken cancellationToken)
     {
         var currentCount = 0;
 
         while (true)
         {
-            await Task.Delay(1000);
+            await Task.Delay(1000, cancellationToken);
 
             if (currentCount++ >= config.MaxNumber)
             {
@@ -143,13 +143,13 @@ public sealed class OddCount(EventCountConfiguration config) : IBackgroundTask
 {
     public string Identifier => "BackgroundOddCount";
 
-    public async ValueTask ExecuteAsync()
+    public async ValueTask ExecuteAsync(CancellationToken cancellationToken)
     {
         var currentCount = 0;
 
         while (true)
         {
-            await Task.Delay(1000);
+            await Task.Delay(1000, cancellationToken);
 
             if (currentCount++ >= config.MaxNumber)
             {
